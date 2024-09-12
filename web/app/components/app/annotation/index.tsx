@@ -4,7 +4,6 @@ import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Pagination } from 'react-headless-pagination'
 import { ArrowLeftIcon, ArrowRightIcon } from '@heroicons/react/24/outline'
-import cn from 'classnames'
 import Toast from '../../base/toast'
 import Filter from './filter'
 import type { QueryParam } from './filter'
@@ -14,6 +13,7 @@ import HeaderOpts from './header-opts'
 import s from './style.module.css'
 import { AnnotationEnableStatus, type AnnotationItem, type AnnotationItemBasic, JobStatus } from './type'
 import ViewAnnotationModal from './view-annotation-modal'
+import cn from '@/utils/classnames'
 import Switch from '@/app/components/base/switch'
 import { addAnnotation, delAnnotation, fetchAnnotationConfig as doFetchAnnotationConfig, editAnnotation, fetchAnnotationList, queryAnnotationJobStatus, updateAnnotationScore, updateAnnotationStatus } from '@/service/annotation'
 import Loading from '@/app/components/base/loading'
@@ -232,8 +232,8 @@ const Annotation: FC<Props> = ({
             middlePagesSiblingCount={1}
             setCurrentPage={setCurrPage}
             totalPages={Math.ceil(total / APP_PAGE_LIMIT)}
-            truncableClassName="w-8 px-0.5 text-center"
-            truncableText="..."
+            truncatableClassName="w-8 px-0.5 text-center"
+            truncatableText="..."
           >
             <Pagination.PrevButton
               disabled={currPage === 0}
@@ -280,7 +280,7 @@ const Annotation: FC<Props> = ({
             onSave={async (embeddingModel, score) => {
               if (
                 embeddingModel.embedding_model_name !== annotationConfig?.embedding_model?.embedding_model_name
-                && embeddingModel.embedding_provider_name !== annotationConfig?.embedding_model?.embedding_provider_name
+                || embeddingModel.embedding_provider_name !== annotationConfig?.embedding_model?.embedding_provider_name
               ) {
                 const { job_id: jobId }: any = await updateAnnotationStatus(appDetail.id, AnnotationEnableStatus.enable, embeddingModel, score)
                 await ensureJobCompleted(jobId, AnnotationEnableStatus.enable)

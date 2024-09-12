@@ -1,5 +1,5 @@
 import type { DataSourceNotionPage } from './common'
-import type { AppMode, RetrievalConfig } from '@/types/app'
+import type { AppIconType, AppMode, RetrievalConfig } from '@/types/app'
 import type { Tag } from '@/app/components/base/tag-management/constant'
 
 export enum DataSourceType {
@@ -8,13 +8,15 @@ export enum DataSourceType {
   WEB = 'website_crawl',
 }
 
+export type DatasetPermission = 'only_me' | 'all_team_members' | 'partial_members'
+
 export type DataSet = {
   id: string
   name: string
   icon: string
   icon_background: string
   description: string
-  permission: 'only_me' | 'all_team_members'
+  permission: DatasetPermission
   data_source_type: DataSourceType
   indexing_technique: 'high_quality' | 'economy'
   created_by: string
@@ -29,6 +31,7 @@ export type DataSet = {
   retrieval_model_dict: RetrievalConfig
   retrieval_model: RetrievalConfig
   tags: Tag[]
+  partial_member_list?: any[]
 }
 
 export type CustomFile = File & {
@@ -186,6 +189,7 @@ export type InitialDocumentDetail = {
   completed_segments?: number
   total_segments?: number
   doc_form: 'text_model' | 'qa_model'
+  doc_language: string
 }
 
 export type SimpleDocumentDetail = InitialDocumentDetail & {
@@ -223,6 +227,8 @@ export type DocumentReq = {
 export type CreateDocumentReq = DocumentReq & {
   data_source: DataSource
   retrieval_model: RetrievalConfig
+  embedding_model: string
+  embedding_model_provider: string
 }
 
 export type IndexingEstimateParams = DocumentReq & Partial<DataSource> & {
@@ -422,8 +428,10 @@ export type RelatedApp = {
   id: string
   name: string
   mode: AppMode
+  icon_type: AppIconType | null
   icon: string
   icon_background: string
+  icon_url: string
 }
 
 export type RelatedAppResponse = {
@@ -431,7 +439,7 @@ export type RelatedAppResponse = {
   total: number
 }
 
-export type SegmentUpdator = {
+export type SegmentUpdater = {
   content: string
   answer?: string
   keywords?: string[]
@@ -445,4 +453,47 @@ export enum DocForm {
 export type ErrorDocsResponse = {
   data: IndexingStatusResponse[]
   total: number
+}
+
+export type SelectedDatasetsMode = {
+  allHighQuality: boolean
+  allHighQualityVectorSearch: boolean
+  allHighQualityFullTextSearch: boolean
+  allEconomic: boolean
+  mixtureHighQualityAndEconomic: boolean
+  inconsistentEmbeddingModel: boolean
+}
+
+export enum WeightedScoreEnum {
+  SemanticFirst = 'semantic_first',
+  KeywordFirst = 'keyword_first',
+  Customized = 'customized',
+}
+
+export enum RerankingModeEnum {
+  RerankingModel = 'reranking_model',
+  WeightedScore = 'weighted_score',
+}
+
+export const DEFAULT_WEIGHTED_SCORE = {
+  allHighQualityVectorSearch: {
+    semantic: 1.0,
+    keyword: 0,
+  },
+  allHighQualityFullTextSearch: {
+    semantic: 0,
+    keyword: 1.0,
+  },
+  semanticFirst: {
+    semantic: 0.7,
+    keyword: 0.3,
+  },
+  keywordFirst: {
+    semantic: 0.3,
+    keyword: 0.7,
+  },
+  other: {
+    semantic: 0.7,
+    keyword: 0.3,
+  },
 }

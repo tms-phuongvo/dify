@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import cn from 'classnames'
 import copy from 'copy-to-clipboard'
 import style from './style.module.css'
+import cn from '@/utils/classnames'
 import Modal from '@/app/components/base/modal'
 import copyStyle from '@/app/components/base/copy-btn/style.module.css'
 import Tooltip from '@/app/components/base/tooltip'
@@ -153,8 +153,7 @@ const Embedded = ({ siteInfo, isShow, onClose, appBaseUrl, accessToken, classNam
           </div>
           <div className="flex items-center justify-center gap-1 p-2 rounded-lg">
             <Tooltip
-              selector={'code-copy-feedback'}
-              content={(isCopied[option] ? t(`${prefixEmbedded}.copied`) : t(`${prefixEmbedded}.copy`)) || ''}
+              popupContent={(isCopied[option] ? t(`${prefixEmbedded}.copied`) : t(`${prefixEmbedded}.copy`)) || ''}
             >
               <div className="w-8 h-8 rounded-lg cursor-pointer hover:bg-gray-100">
                 <div onClick={onClickCopy} className={`w-full h-full ${copyStyle.copyIcon} ${isCopied[option] ? copyStyle.copied : ''}`}></div>

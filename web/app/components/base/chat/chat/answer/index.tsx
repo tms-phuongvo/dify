@@ -8,6 +8,7 @@ import type {
   ChatConfig,
   ChatItem,
 } from '../../types'
+import { useChatContext } from '../context'
 import Operation from './operation'
 import AgentContent from './agent-content'
 import BasicContent from './basic-content'
@@ -21,6 +22,7 @@ import Citation from '@/app/components/base/chat/chat/citation'
 import { EditTitle } from '@/app/components/app/annotation/edit-annotation-modal/edit-item'
 import type { Emoji } from '@/app/components/tools/types'
 import type { AppData } from '@/models/share'
+import AnswerIcon from '@/app/components/base/answer-icon'
 
 type AnswerProps = {
   item: ChatItem
@@ -59,23 +61,25 @@ const Answer: FC<AnswerProps> = ({
   } = item
   const hasAgentThoughts = !!agent_thoughts?.length
 
-  const [containerWidth, setContainerWidth] = useState(0)
+  const [containerWidth] = useState(0)
   const [contentWidth, setContentWidth] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
-  const getContainerWidth = () => {
-    if (containerRef.current)
-      setContainerWidth(containerRef.current?.clientWidth + 16)
-  }
+  const {
+    config: chatContextConfig,
+  } = useChatContext()
+
+  const voiceRef = useRef(chatContextConfig?.text_to_speech?.voice)
   const getContentWidth = () => {
     if (contentRef.current)
       setContentWidth(contentRef.current?.clientWidth)
   }
 
   useEffect(() => {
-    getContainerWidth()
-  }, [])
+    voiceRef.current = chatContextConfig?.text_to_speech?.voice
+  }
+  , [chatContextConfig?.text_to_speech?.voice])
 
   useEffect(() => {
     if (!responding)
@@ -86,11 +90,7 @@ const Answer: FC<AnswerProps> = ({
     <div className='flex mb-2 last:mb-0'>
       <div className='shrink-0 relative w-10 h-10'>
         {
-          answerIcon || (
-            <div className='flex items-center justify-center w-full h-full rounded-full bg-[#d5f5f6] border-[0.5px] border-black/5 text-xl'>
-              🤖
-            </div>
-          )
+          answerIcon || <AnswerIcon />
         }
         {
           responding && (

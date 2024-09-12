@@ -4,10 +4,12 @@ import type { AnnotationReply, MessageEnd, MessageReplace, ThoughtItem } from '@
 import type { VisionFile } from '@/types/app'
 import type {
   IterationFinishedResponse,
-  IterationNextedResponse,
+  IterationNextResponse,
   IterationStartedResponse,
   NodeFinishedResponse,
   NodeStartedResponse,
+  ParallelBranchFinishedResponse,
+  ParallelBranchStartedResponse,
   TextChunkResponse,
   TextReplaceResponse,
   WorkflowFinishedResponse,
@@ -19,6 +21,7 @@ const TIME_OUT = 100000
 const ContentType = {
   json: 'application/json',
   stream: 'text/event-stream',
+  audio: 'audio/mpeg',
   form: 'application/x-www-form-urlencoded; charset=UTF-8',
   download: 'application/octet-stream', // for download
   upload: 'multipart/form-data', // for upload
@@ -56,9 +59,13 @@ export type IOnWorkflowFinished = (workflowFinished: WorkflowFinishedResponse) =
 export type IOnNodeStarted = (nodeStarted: NodeStartedResponse) => void
 export type IOnNodeFinished = (nodeFinished: NodeFinishedResponse) => void
 export type IOnIterationStarted = (workflowStarted: IterationStartedResponse) => void
-export type IOnIterationNexted = (workflowStarted: IterationNextedResponse) => void
+export type IOnIterationNext = (workflowStarted: IterationNextResponse) => void
 export type IOnIterationFinished = (workflowFinished: IterationFinishedResponse) => void
+export type IOnParallelBranchStarted = (parallelBranchStarted: ParallelBranchStartedResponse) => void
+export type IOnParallelBranchFinished = (parallelBranchFinished: ParallelBranchFinishedResponse) => void
 export type IOnTextChunk = (textChunk: TextChunkResponse) => void
+export type IOnTTSChunk = (messageId: string, audioStr: string, audioType?: string) => void
+export type IOnTTSEnd = (messageId: string, audioStr: string, audioType?: string) => void
 export type IOnTextReplace = (textReplace: TextReplaceResponse) => void
 
 export type IOtherOptions = {
@@ -81,9 +88,13 @@ export type IOtherOptions = {
   onNodeStarted?: IOnNodeStarted
   onNodeFinished?: IOnNodeFinished
   onIterationStart?: IOnIterationStarted
-  onIterationNext?: IOnIterationNexted
+  onIterationNext?: IOnIterationNext
   onIterationFinish?: IOnIterationFinished
+  onParallelBranchStarted?: IOnParallelBranchStarted
+  onParallelBranchFinished?: IOnParallelBranchFinished
   onTextChunk?: IOnTextChunk
+  onTTSChunk?: IOnTTSChunk
+  onTTSEnd?: IOnTTSEnd
   onTextReplace?: IOnTextReplace
 }
 
@@ -132,9 +143,13 @@ const handleStream = (
   onNodeStarted?: IOnNodeStarted,
   onNodeFinished?: IOnNodeFinished,
   onIterationStart?: IOnIterationStarted,
-  onIterationNext?: IOnIterationNexted,
+  onIterationNext?: IOnIterationNext,
   onIterationFinish?: IOnIterationFinished,
+  onParallelBranchStarted?: IOnParallelBranchStarted,
+  onParallelBranchFinished?: IOnParallelBranchFinished,
   onTextChunk?: IOnTextChunk,
+  onTTSChunk?: IOnTTSChunk,
+  onTTSEnd?: IOnTTSEnd,
   onTextReplace?: IOnTextReplace,
 ) => {
   if (!response.ok)
@@ -180,7 +195,7 @@ const handleStream = (
               return
             }
             if (bufferObj.event === 'message' || bufferObj.event === 'agent_message') {
-              // can not use format here. Because message is splited.
+              // can not use format here. Because message is splitted.
               onData(unicodeToChar(bufferObj.answer), isFirstMessage, {
                 conversationId: bufferObj.conversation_id,
                 taskId: bufferObj.task_id,
@@ -216,16 +231,28 @@ const handleStream = (
               onIterationStart?.(bufferObj as IterationStartedResponse)
             }
             else if (bufferObj.event === 'iteration_next') {
-              onIterationNext?.(bufferObj as IterationNextedResponse)
+              onIterationNext?.(bufferObj as IterationNextResponse)
             }
             else if (bufferObj.event === 'iteration_completed') {
               onIterationFinish?.(bufferObj as IterationFinishedResponse)
+            }
+            else if (bufferObj.event === 'parallel_branch_started') {
+              onParallelBranchStarted?.(bufferObj as ParallelBranchStartedResponse)
+            }
+            else if (bufferObj.event === 'parallel_branch_finished') {
+              onParallelBranchFinished?.(bufferObj as ParallelBranchFinishedResponse)
             }
             else if (bufferObj.event === 'text_chunk') {
               onTextChunk?.(bufferObj as TextChunkResponse)
             }
             else if (bufferObj.event === 'text_replace') {
               onTextReplace?.(bufferObj as TextReplaceResponse)
+            }
+            else if (bufferObj.event === 'tts_message') {
+              onTTSChunk?.(bufferObj.message_id, bufferObj.audio, bufferObj.audio_type)
+            }
+            else if (bufferObj.event === 'tts_message_end') {
+              onTTSEnd?.(bufferObj.message_id, bufferObj.audio)
             }
           }
         })
@@ -390,9 +417,10 @@ const baseFetch = <T>(
           }
 
           // return data
-          const data: Promise<T> = options.headers.get('Content-type') === ContentType.download ? res.blob() : res.json()
+          if (options.headers.get('Content-type') === ContentType.download || options.headers.get('Content-type') === ContentType.audio)
+            resolve(needAllResponseContent ? resClone : res.blob())
 
-          resolve(needAllResponseContent ? resClone : data)
+          else resolve(needAllResponseContent ? resClone : res.json())
         })
         .catch((err) => {
           if (!silent)
@@ -474,7 +502,11 @@ export const ssePost = (
     onIterationStart,
     onIterationNext,
     onIterationFinish,
+    onParallelBranchStarted,
+    onParallelBranchFinished,
     onTextChunk,
+    onTTSChunk,
+    onTTSEnd,
     onTextReplace,
     onError,
     getAbortController,
@@ -522,14 +554,15 @@ export const ssePost = (
       return handleStream(res, (str: string, isFirstMessage: boolean, moreInfo: IOnDataMoreInfo) => {
         if (moreInfo.errorMessage) {
           onError?.(moreInfo.errorMessage, moreInfo.errorCode)
-          if (moreInfo.errorMessage !== 'AbortError: The user aborted a request.')
+          // TypeError: Cannot assign to read only property ... will happen in page leave, so it should be ignored.
+          if (moreInfo.errorMessage !== 'AbortError: The user aborted a request.' && !moreInfo.errorMessage.includes('TypeError: Cannot assign to read only property'))
             Toast.notify({ type: 'error', message: moreInfo.errorMessage })
           return
         }
         onData?.(str, isFirstMessage, moreInfo)
-      }, onCompleted, onThought, onMessageEnd, onMessageReplace, onFile, onWorkflowStarted, onWorkflowFinished, onNodeStarted, onNodeFinished, onIterationStart, onIterationNext, onIterationFinish, onTextChunk, onTextReplace)
+      }, onCompleted, onThought, onMessageEnd, onMessageReplace, onFile, onWorkflowStarted, onWorkflowFinished, onNodeStarted, onNodeFinished, onIterationStart, onIterationNext, onIterationFinish, onParallelBranchStarted, onParallelBranchFinished, onTextChunk, onTTSChunk, onTTSEnd, onTextReplace)
     }).catch((e) => {
-      if (e.toString() !== 'AbortError: The user aborted a request.')
+      if (e.toString() !== 'AbortError: The user aborted a request.' && !e.toString().errorMessage.includes('TypeError: Cannot assign to read only property'))
         Toast.notify({ type: 'error', message: e })
       onError?.(e)
     })
