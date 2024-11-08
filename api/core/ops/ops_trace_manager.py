@@ -6,12 +6,13 @@ import threading
 import time
 from datetime import timedelta
 from typing import Any, Optional, Union
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from flask import current_app
 
 from core.helper.encrypter import decrypt_token, encrypt_token, obfuscated_token
 from core.ops.entities.config_entity import (
+    OPS_FILE_PATH,
     LangfuseConfig,
     LangSmithConfig,
     TracingProviderEnum,
@@ -22,6 +23,7 @@ from core.ops.entities.trace_entity import (
     MessageTraceInfo,
     ModerationTraceInfo,
     SuggestedQuestionTraceInfo,
+    TaskData,
     ToolTraceInfo,
     TraceTaskName,
     WorkflowTraceInfo,
@@ -30,6 +32,7 @@ from core.ops.langfuse_trace.langfuse_trace import LangFuseDataTrace
 from core.ops.langsmith_trace.langsmith_trace import LangSmithDataTrace
 from core.ops.utils import get_message_data
 from extensions.ext_database import db
+from extensions.ext_storage import storage
 from models.model import App, AppModelConfig, Conversation, Message, MessageAgentThought, MessageFile, TraceAppConfig
 from models.workflow import WorkflowAppLog, WorkflowRun
 from tasks.ops_trace_task import process_trace_tasks
@@ -176,11 +179,18 @@ class OpsTraceManager:
             return None
 
         app: App = db.session.query(App).filter(App.id == app_id).first()
+
+        if app is None:
+            return None
+
         app_ops_trace_config = json.loads(app.tracing) if app.tracing else None
 
-        if app_ops_trace_config is not None:
-            tracing_provider = app_ops_trace_config.get("tracing_provider")
-        else:
+        if app_ops_trace_config is None:
+            return None
+
+        tracing_provider = app_ops_trace_config.get("tracing_provider")
+
+        if tracing_provider is None or tracing_provider not in provider_config_map:
             return None
 
         # decrypt_token
@@ -223,7 +233,7 @@ class OpsTraceManager:
         :return:
         """
         # auth check
-        if tracing_provider not in provider_config_map.keys() and tracing_provider is not None:
+        if tracing_provider not in provider_config_map and tracing_provider is not None:
             raise ValueError(f"Invalid tracing provider: {tracing_provider}")
 
         app_config: App = db.session.query(App).filter(App.id == app_id).first()
@@ -351,14 +361,14 @@ class TraceTask:
         workflow_run_id = workflow_run.id
         workflow_run_elapsed_time = workflow_run.elapsed_time
         workflow_run_status = workflow_run.status
-        workflow_run_inputs = json.loads(workflow_run.inputs) if workflow_run.inputs else {}
-        workflow_run_outputs = json.loads(workflow_run.outputs) if workflow_run.outputs else {}
+        workflow_run_inputs = workflow_run.inputs_dict
+        workflow_run_outputs = workflow_run.outputs_dict
         workflow_run_version = workflow_run.version
-        error = workflow_run.error if workflow_run.error else ""
+        error = workflow_run.error or ""
 
         total_tokens = workflow_run.total_tokens
 
-        file_list = workflow_run_inputs.get("sys.file") if workflow_run_inputs.get("sys.file") else []
+        file_list = workflow_run_inputs.get("sys.file") or []
         query = workflow_run_inputs.get("query") or workflow_run_inputs.get("sys.query") or ""
 
         # get workflow_app_log_id
@@ -452,7 +462,7 @@ class TraceTask:
             message_tokens=message_tokens,
             answer_tokens=message_data.answer_tokens,
             total_tokens=message_tokens + message_data.answer_tokens,
-            error=message_data.error if message_data.error else "",
+            error=message_data.error or "",
             inputs=inputs,
             outputs=message_data.answer,
             file_list=file_list,
@@ -487,7 +497,7 @@ class TraceTask:
             workflow_app_log_id = str(workflow_app_log_data.id) if workflow_app_log_data else None
 
         moderation_trace_info = ModerationTraceInfo(
-            message_id=workflow_app_log_id if workflow_app_log_id else message_id,
+            message_id=workflow_app_log_id or message_id,
             inputs=inputs,
             message_data=message_data.to_dict(),
             flagged=moderation_result.flagged,
@@ -527,7 +537,7 @@ class TraceTask:
             workflow_app_log_id = str(workflow_app_log_data.id) if workflow_app_log_data else None
 
         suggested_question_trace_info = SuggestedQuestionTraceInfo(
-            message_id=workflow_app_log_id if workflow_app_log_id else message_id,
+            message_id=workflow_app_log_id or message_id,
             message_data=message_data.to_dict(),
             inputs=message_data.message,
             outputs=message_data.answer,
@@ -569,7 +579,7 @@ class TraceTask:
 
         dataset_retrieval_trace_info = DatasetRetrievalTraceInfo(
             message_id=message_id,
-            inputs=message_data.query if message_data.query else message_data.inputs,
+            inputs=message_data.query or message_data.inputs,
             documents=[doc.model_dump() for doc in documents],
             start_time=timer.get("start"),
             end_time=timer.get("end"),
@@ -695,14 +705,13 @@ class TraceQueueManager:
             self.start_timer()
 
     def add_trace_task(self, trace_task: TraceTask):
-        global trace_manager_timer
-        global trace_manager_queue
+        global trace_manager_timer, trace_manager_queue
         try:
             if self.trace_instance:
                 trace_task.app_id = self.app_id
                 trace_manager_queue.put(trace_task)
         except Exception as e:
-            logging.debug(f"Error adding trace task: {e}")
+            logging.exception(f"Error adding trace task: {e}")
         finally:
             self.start_timer()
 
@@ -721,7 +730,7 @@ class TraceQueueManager:
             if tasks:
                 self.send_to_celery(tasks)
         except Exception as e:
-            logging.debug(f"Error processing trace tasks: {e}")
+            logging.exception(f"Error processing trace tasks: {e}")
 
     def start_timer(self):
         global trace_manager_timer
@@ -734,10 +743,17 @@ class TraceQueueManager:
     def send_to_celery(self, tasks: list[TraceTask]):
         with self.flask_app.app_context():
             for task in tasks:
+                file_id = uuid4().hex
                 trace_info = task.execute()
-                task_data = {
+                task_data = TaskData(
+                    app_id=task.app_id,
+                    trace_info_type=type(trace_info).__name__,
+                    trace_info=trace_info.model_dump() if trace_info else None,
+                )
+                file_path = f"{OPS_FILE_PATH}{task.app_id}/{file_id}.json"
+                storage.save(file_path, task_data.model_dump_json().encode("utf-8"))
+                file_info = {
+                    "file_id": file_id,
                     "app_id": task.app_id,
-                    "trace_info_type": type(trace_info).__name__,
-                    "trace_info": trace_info.model_dump() if trace_info else {},
                 }
-                process_trace_tasks.delay(task_data)
+                process_trace_tasks.delay(file_info)

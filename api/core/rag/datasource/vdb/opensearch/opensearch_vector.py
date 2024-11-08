@@ -9,11 +9,11 @@ from opensearchpy.helpers import BulkIndexError
 from pydantic import BaseModel, model_validator
 
 from configs import dify_config
-from core.rag.datasource.entity.embedding import Embeddings
 from core.rag.datasource.vdb.field import Field
 from core.rag.datasource.vdb.vector_base import BaseVector
 from core.rag.datasource.vdb.vector_factory import AbstractVectorFactory
 from core.rag.datasource.vdb.vector_type import VectorType
+from core.rag.embedding.embedding_base import Embeddings
 from core.rag.models.document import Document
 from extensions.ext_redis import redis_client
 from models.dataset import Dataset
@@ -129,7 +129,7 @@ class OpenSearchVector(BaseVector):
                     if status == 404:
                         logger.warning(f"Document not found for deletion: {doc_id}")
                     else:
-                        logger.error(f"Error deleting document: {error}")
+                        logger.exception(f"Error deleting document: {error}")
 
     def delete(self) -> None:
         self._client.indices.delete(index=self._collection_name.lower())
@@ -158,7 +158,7 @@ class OpenSearchVector(BaseVector):
         try:
             response = self._client.search(index=self._collection_name.lower(), body=query)
         except Exception as e:
-            logger.error(f"Error executing search: {e}")
+            logger.exception(f"Error executing search: {e}")
             raise
 
         docs = []
@@ -170,7 +170,7 @@ class OpenSearchVector(BaseVector):
                 metadata = {}
 
             metadata["score"] = hit["_score"]
-            score_threshold = kwargs.get("score_threshold") if kwargs.get("score_threshold") else 0.0
+            score_threshold = float(kwargs.get("score_threshold") or 0.0)
             if hit["_score"] > score_threshold:
                 doc = Document(page_content=hit["_source"].get(Field.CONTENT_KEY.value), metadata=metadata)
                 docs.append(doc)

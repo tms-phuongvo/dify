@@ -7,17 +7,19 @@ import os
 import re
 import tempfile
 import uuid
-import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
+from xml.etree import ElementTree
 
 import requests
 from docx import Document as DocxDocument
 
 from configs import dify_config
+from core.helper import ssrf_proxy
 from core.rag.extractor.extractor_base import BaseExtractor
 from core.rag.models.document import Document
 from extensions.ext_database import db
 from extensions.ext_storage import storage
+from models.enums import CreatedByRole
 from models.model import UploadFile
 
 logger = logging.getLogger(__name__)
@@ -25,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 class WordExtractor(BaseExtractor):
     """Load docx files.
-
 
     Args:
         file_path: Path to the file to load.
@@ -48,9 +49,10 @@ class WordExtractor(BaseExtractor):
                 raise ValueError(f"Check the url of your file; returned status code {r.status_code}")
 
             self.web_path = self.file_path
-            self.temp_file = tempfile.NamedTemporaryFile()
-            self.temp_file.write(r.content)
-            self.file_path = self.temp_file.name
+            # TODO: use a better way to handle the file
+            with tempfile.NamedTemporaryFile(delete=False) as self.temp_file:
+                self.temp_file.write(r.content)
+                self.file_path = self.temp_file.name
         elif not os.path.isfile(self.file_path):
             raise ValueError(f"File path {self.file_path} is not a valid file or url")
 
@@ -84,7 +86,7 @@ class WordExtractor(BaseExtractor):
                 image_count += 1
                 if rel.is_external:
                     url = rel.reltype
-                    response = requests.get(url, stream=True)
+                    response = ssrf_proxy.get(url, stream=True)
                     if response.status_code == 200:
                         image_ext = mimetypes.guess_extension(response.headers["Content-Type"])
                         file_uuid = str(uuid.uuid4())
@@ -108,9 +110,10 @@ class WordExtractor(BaseExtractor):
                     key=file_key,
                     name=file_key,
                     size=0,
-                    extension=image_ext,
-                    mime_type=mime_type,
+                    extension=str(image_ext),
+                    mime_type=mime_type or "",
                     created_by=self.user_id,
+                    created_by_role=CreatedByRole.ACCOUNT,
                     created_at=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None),
                     used=True,
                     used_by=self.user_id,
@@ -120,7 +123,7 @@ class WordExtractor(BaseExtractor):
                 db.session.add(upload_file)
                 db.session.commit()
                 image_map[rel.target_part] = (
-                    f"![image]({dify_config.CONSOLE_API_URL}/files/{upload_file.id}/image-preview)"
+                    f"![image]({dify_config.CONSOLE_API_URL}/files/{upload_file.id}/file-preview)"
                 )
 
         return image_map
@@ -152,7 +155,7 @@ class WordExtractor(BaseExtractor):
             if col_index >= total_cols:
                 break
             cell_content = self._parse_cell(cell, image_map).strip()
-            cell_colspan = cell.grid_span if cell.grid_span else 1
+            cell_colspan = cell.grid_span or 1
             for i in range(cell_colspan):
                 if col_index + i < total_cols:
                     row_cells[col_index + i] = cell_content if i == 0 else ""
@@ -217,7 +220,7 @@ class WordExtractor(BaseExtractor):
                     hyperlinks_url = None
                 if "HYPERLINK" in run.element.xml:
                     try:
-                        xml = ET.XML(run.element.xml)
+                        xml = ElementTree.XML(run.element.xml)
                         x_child = [c for c in xml.iter() if c is not None]
                         for x in x_child:
                             if x_child is None:
@@ -226,12 +229,12 @@ class WordExtractor(BaseExtractor):
                                 for i in url_pattern.findall(x.text):
                                     hyperlinks_url = str(i)
                     except Exception as e:
-                        logger.error(e)
+                        logger.exception(e)
 
         def parse_paragraph(paragraph):
             paragraph_content = []
             for run in paragraph.runs:
-                if hasattr(run.element, "tag") and isinstance(element.tag, str) and run.element.tag.endswith("r"):
+                if hasattr(run.element, "tag") and isinstance(run.element.tag, str) and run.element.tag.endswith("r"):
                     drawing_elements = run.element.findall(
                         ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing"
                     )
