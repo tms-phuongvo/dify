@@ -211,7 +211,7 @@ export const useFile = (fileConfig: FileUpload) => {
       type: '',
       size: 0,
       progress: 0,
-      transferMethod: TransferMethod.local_file,
+      transferMethod: TransferMethod.remote_url,
       supportFileType: '',
       url,
       isRemote: true,
@@ -241,7 +241,7 @@ export const useFile = (fileConfig: FileUpload) => {
       notify({ type: 'error', message: t('common.fileUploader.pasteFileLinkInvalid') })
       handleRemoveFile(uploadingFile.id)
     })
-  }, [checkSizeLimit, handleAddFile, handleUpdateFile, notify, t, handleRemoveFile, fileConfig?.allowed_file_types, fileConfig.allowed_file_extensions, startProgressTimer])
+  }, [checkSizeLimit, handleAddFile, handleUpdateFile, notify, t, handleRemoveFile, fileConfig?.allowed_file_types, fileConfig.allowed_file_extensions, startProgressTimer, params.token])
 
   const handleLoadFileFromLinkSuccess = useCallback(() => { }, [])
 
@@ -310,7 +310,8 @@ export const useFile = (fileConfig: FileUpload) => {
 
   const handleClipboardPasteFile = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
     const file = e.clipboardData?.files[0]
-    if (file) {
+    const text = e.clipboardData?.getData('text/plain')
+    if (file && !text) {
       e.preventDefault()
       handleLocalFileUpload(file)
     }
