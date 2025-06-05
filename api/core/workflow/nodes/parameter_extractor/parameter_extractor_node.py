@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any, Optional, cast
@@ -24,13 +25,12 @@ from core.prompt.advanced_prompt_transform import AdvancedPromptTransform
 from core.prompt.entities.advanced_prompt_entities import ChatModelMessage, CompletionModelPromptTemplate
 from core.prompt.simple_prompt_transform import ModelMode
 from core.prompt.utils.prompt_message_util import PromptMessageUtil
-from core.workflow.entities.node_entities import NodeRunMetadataKey, NodeRunResult
+from core.workflow.entities.node_entities import NodeRunResult
 from core.workflow.entities.variable_pool import VariablePool
+from core.workflow.entities.workflow_node_execution import WorkflowNodeExecutionMetadataKey, WorkflowNodeExecutionStatus
 from core.workflow.nodes.enums import NodeType
 from core.workflow.nodes.llm import LLMNode, ModelConfig
 from core.workflow.utils import variable_template_parser
-from extensions.ext_database import db
-from models.workflow import WorkflowNodeExecutionStatus
 
 from .entities import ParameterExtractorNodeData
 from .exc import (
@@ -57,6 +57,30 @@ from .prompts import (
     FUNCTION_CALLING_EXTRACTOR_SYSTEM_PROMPT,
     FUNCTION_CALLING_EXTRACTOR_USER_TEMPLATE,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def extract_json(text):
+    """
+    From a given JSON started from '{' or '[' extract the complete JSON object.
+    """
+    stack = []
+    for i, c in enumerate(text):
+        if c in {"{", "["}:
+            stack.append(c)
+        elif c in {"}", "]"}:
+            # check if stack is empty
+            if not stack:
+                return text[:i]
+            # check if the last element in stack is matching
+            if (c == "}" and stack[-1] == "{") or (c == "]" and stack[-1] == "["):
+                stack.pop()
+                if not stack:
+                    return text[: i + 1]
+            else:
+                return text[:i]
+    return None
 
 
 class ParameterExtractorNode(LLMNode):
@@ -161,6 +185,8 @@ class ParameterExtractorNode(LLMNode):
             "usage": None,
             "function": {} if not prompt_message_tools else jsonable_encoder(prompt_message_tools[0]),
             "tool_call": None,
+            "model_provider": model_config.provider,
+            "model_name": model_config.model,
         }
 
         try:
@@ -217,9 +243,9 @@ class ParameterExtractorNode(LLMNode):
             process_data=process_data,
             outputs={"__is_success": 1 if not error else 0, "__reason": error, **result},
             metadata={
-                NodeRunMetadataKey.TOTAL_TOKENS: usage.total_tokens,
-                NodeRunMetadataKey.TOTAL_PRICE: usage.total_price,
-                NodeRunMetadataKey.CURRENCY: usage.currency,
+                WorkflowNodeExecutionMetadataKey.TOTAL_TOKENS: usage.total_tokens,
+                WorkflowNodeExecutionMetadataKey.TOTAL_PRICE: usage.total_price,
+                WorkflowNodeExecutionMetadataKey.CURRENCY: usage.currency,
             },
             llm_usage=usage,
         )
@@ -232,8 +258,6 @@ class ParameterExtractorNode(LLMNode):
         tools: list[PromptMessageTool],
         stop: list[str],
     ) -> tuple[str, LLMUsage, Optional[AssistantPromptMessage.ToolCall]]:
-        db.session.close()
-
         invoke_result = model_instance.invoke_llm(
             prompt_messages=prompt_messages,
             model_parameters=node_data_model.completion_params,
@@ -594,27 +618,6 @@ class ParameterExtractorNode(LLMNode):
         Extract complete json response.
         """
 
-        def extract_json(text):
-            """
-            From a given JSON started from '{' or '[' extract the complete JSON object.
-            """
-            stack = []
-            for i, c in enumerate(text):
-                if c in {"{", "["}:
-                    stack.append(c)
-                elif c in {"}", "]"}:
-                    # check if stack is empty
-                    if not stack:
-                        return text[:i]
-                    # check if the last element in stack is matching
-                    if (c == "}" and stack[-1] == "{") or (c == "]" and stack[-1] == "["):
-                        stack.pop()
-                        if not stack:
-                            return text[: i + 1]
-                    else:
-                        return text[:i]
-            return None
-
         # extract json from the text
         for idx in range(len(result)):
             if result[idx] == "{" or result[idx] == "[":
@@ -624,6 +627,7 @@ class ParameterExtractorNode(LLMNode):
                         return cast(dict, json.loads(json_str))
                     except Exception:
                         pass
+        logger.info(f"extra error: {result}")
         return None
 
     def _extract_json_from_tool_call(self, tool_call: AssistantPromptMessage.ToolCall) -> Optional[dict]:
@@ -633,7 +637,18 @@ class ParameterExtractorNode(LLMNode):
         if not tool_call or not tool_call.function.arguments:
             return None
 
-        return cast(dict, json.loads(tool_call.function.arguments))
+        result = tool_call.function.arguments
+        # extract json from the arguments
+        for idx in range(len(result)):
+            if result[idx] == "{" or result[idx] == "[":
+                json_str = extract_json(result[idx:])
+                if json_str:
+                    try:
+                        return cast(dict, json.loads(json_str))
+                    except Exception:
+                        pass
+        logger.info(f"extra error: {result}")
+        return None
 
     def _generate_default_result(self, data: ParameterExtractorNodeData) -> dict:
         """
@@ -798,7 +813,6 @@ class ParameterExtractorNode(LLMNode):
         :param node_data: node data
         :return:
         """
-        # FIXME: fix the type error later
         variable_mapping: dict[str, Sequence[str]] = {"query": node_data.query}
 
         if node_data.instruction:
